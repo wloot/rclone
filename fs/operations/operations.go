@@ -164,6 +164,30 @@ func logModTimeUpload(dst fs.Object) {
 	})
 }
 
+func NeedSync(ctx context.Context, dst, src fs.Object) bool {
+	ci := fs.GetConfig(ctx)
+	if dst == nil {
+		return true
+	}
+
+	if !ci.IgnoreTimes && ci.CheckSum {
+		if sizeDiffers(ctx, src, dst) {
+			return true
+		}
+
+		same, ht, _ := CheckHashes(ctx, src, dst)
+		if ht == hash.None || !same {
+			return true
+		}
+		err := dst.SetModTime(ctx, src.ModTime(ctx))
+		if err != nil {
+			return true
+		}
+		return false
+	}
+	return true
+}
+
 func equal(ctx context.Context, src fs.ObjectInfo, dst fs.Object, opt equalOpt) bool {
 	ci := fs.GetConfig(ctx)
 	if sizeDiffers(ctx, src, dst) {
