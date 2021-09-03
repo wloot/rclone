@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"mime"
 	"net/http"
 	"path"
@@ -73,6 +74,8 @@ const (
 	listRGrouping    = 50   // number of IDs to search at once when using ListR
 	listRInputBuffer = 1000 // size of input buffer when using ListR
 	defaultXDGIcon   = "text-html"
+
+	defaultPoolSleep = fs.Duration(4 * time.Minute)
 )
 
 // Globals
@@ -278,6 +281,9 @@ a non root folder as its starting point.
 		}, {
 			Name: "service_account_file",
 			Help: "Service Account Credentials JSON file path \nLeave blank normally.\nNeeded only if you want use SA instead of interactive login." + env.ShellExpandHelp,
+		}, {
+			Name: "service_account_file_path",
+			Help: "Service Account Credentials JSON folder path.",
 		}, {
 			Name:     "service_account_credentials",
 			Help:     "Service Account Credentials JSON blob\nLeave blank normally.\nNeeded only if you want use SA instead of interactive login.",
@@ -602,6 +608,8 @@ type Options struct {
 	StopOnDownloadLimit       bool                 `config:"stop_on_download_limit"`
 	SkipShortcuts             bool                 `config:"skip_shortcuts"`
 	Enc                       encoder.MultiEncoder `config:"encoding"`
+
+	ServiceAccountFilePath string `config:"service_account_file_path"`
 }
 
 // Fs represents a remote drive server
@@ -625,6 +633,8 @@ type Fs struct {
 	grouping         int32               // number of IDs to search at once in ListR - read with atomic
 	listRmu          *sync.Mutex         // protects listRempties
 	listRempties     map[string]struct{} // IDs of supposedly empty directories which triggered grouping disable
+
+	serviceAccountPool *serviceAccountPool
 }
 
 type baseObject struct {
@@ -656,6 +666,71 @@ type Object struct {
 	v2Download bool   // generate v2 download link ondemand
 }
 
+type serviceAccountPool struct {
+	clients []*http.Client
+	mu      *sync.Mutex
+	index   int
+	last    time.Time
+}
+
+func newServiceAccountPool(ctx context.Context, opt *Options) *serviceAccountPool {
+	var clients []*http.Client
+	dir := opt.ServiceAccountFilePath
+	if len(dir) > 0 {
+		files, err := ioutil.ReadDir(dir)
+		if err != nil {
+			return nil
+		}
+
+		rand.Seed(time.Now().UnixNano())
+		rand.Shuffle(len(files), func(i, j int) {
+			files[i], files[j] = files[j], files[i]
+		})
+		for _, file := range files {
+			data, err := ioutil.ReadFile(path.Join(dir, file.Name()))
+			if err != nil {
+				continue
+			}
+			client, err := getServiceAccountClient(ctx, opt, data)
+			if err != nil {
+				continue
+			}
+			clients = append(clients, client)
+		}
+	}
+
+	if len(clients) <= 0 {
+		return nil
+	}
+	return &serviceAccountPool{
+		clients: clients,
+		mu:      new(sync.Mutex),
+		index:   -1,
+	}
+}
+
+func (p *serviceAccountPool) add(client *http.Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.clients = append(p.clients, client)
+}
+
+func (p *serviceAccountPool) get() *http.Client {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if fs.Duration(time.Now().Sub(p.last)) < defaultPoolSleep {
+		return nil
+	}
+	if len(p.clients)-1 <= p.index {
+		p.index = -1
+	}
+	p.index += 1
+	p.last = time.Now()
+	return p.clients[p.index]
+}
+
 // ------------------------------------------------------------
 
 // Name of the remote (as passed into NewFs)
@@ -678,6 +753,22 @@ func (f *Fs) Features() *fs.Features {
 	return f.features
 }
 
+func tryChangeSA(ctx context.Context, f *Fs) {
+	if f.serviceAccountPool == nil {
+		return
+	}
+	client := f.serviceAccountPool.get()
+	if client != nil {
+		f.client = client
+		f.svc, _ = drive.New(f.client)
+		if f.opt.V2DownloadMinSize >= 0 {
+			f.v2Svc, _ = drive_v2.New(f.client)
+		}
+		f.pacer = fs.NewPacer(ctx, pacer.NewGoogleDrive(pacer.MinSleep(f.opt.PacerMinSleep), pacer.Burst(f.opt.PacerBurst)))
+		fs.Infof(f, "Service account changed due to rate limit")
+	}
+}
+
 // shouldRetry determines whether a given err rates being retried
 func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 	if fserrors.ContextError(ctx, &err) {
@@ -698,14 +789,20 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 		if len(gerr.Errors) > 0 {
 			reason := gerr.Errors[0].Reason
 			if reason == "rateLimitExceeded" || reason == "userRateLimitExceeded" {
-				if f.opt.StopOnUploadLimit && gerr.Errors[0].Message == "User rate limit exceeded." {
-					fs.Errorf(f, "Received upload limit error: %v", err)
-					return false, fserrors.FatalError(err)
+				if gerr.Errors[0].Message == "User rate limit exceeded." {
+					if f.opt.StopOnUploadLimit {
+						fs.Errorf(f, "Received upload limit error: %v", err)
+						return false, fserrors.FatalError(err)
+					}
+					tryChangeSA(ctx, f)
 				}
 				return true, err
-			} else if f.opt.StopOnDownloadLimit && reason == "downloadQuotaExceeded" {
-				fs.Errorf(f, "Received download limit error: %v", err)
-				return false, fserrors.FatalError(err)
+			} else if reason == "downloadQuotaExceeded" {
+				if f.opt.StopOnDownloadLimit {
+					fs.Errorf(f, "Received download limit error: %v", err)
+					return false, fserrors.FatalError(err)
+				}
+				tryChangeSA(ctx, f)
 			} else if f.opt.StopOnUploadLimit && reason == "teamDriveFileLimitExceeded" {
 				fs.Errorf(f, "Received Shared Drive file limit error: %v", err)
 				return false, fserrors.FatalError(err)
@@ -1089,9 +1186,19 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		return nil, errors.Wrap(err, "drive: chunk size")
 	}
 
+	pool := newServiceAccountPool(ctx, opt)
 	oAuthClient, err := createOAuthClient(ctx, opt, name, m)
 	if err != nil {
-		return nil, errors.Wrap(err, "drive: failed when making oauth client")
+		if pool != nil {
+			oAuthClient = pool.get()
+			pool.last = time.Time{}
+		} else {
+			return nil, errors.Wrap(err, "drive: failed when making oauth client")
+		}
+	} else {
+		if pool != nil {
+			pool.add(oAuthClient)
+		}
 	}
 
 	root, err := parseDrivePath(path)
@@ -1110,6 +1217,8 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		grouping:     listRGrouping,
 		listRmu:      new(sync.Mutex),
 		listRempties: make(map[string]struct{}),
+
+		serviceAccountPool: pool,
 	}
 	f.isTeamDrive = opt.TeamDriveID != ""
 	f.fileFields = f.getFileFields()
