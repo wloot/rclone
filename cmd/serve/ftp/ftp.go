@@ -13,6 +13,7 @@ import (
 	"os/user"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/rclone/rclone/cmd"
@@ -500,6 +501,11 @@ func (f *FileInfo) Group() string {
 		return str //Group not found default to numerical value
 	}
 	return g.Name
+}
+
+// ModTime returns the time in UTC
+func (f *FileInfo) ModTime() time.Time {
+	return f.FileInfo.ModTime().UTC()
 }
 
 func closeIO(path string, c io.Closer) {
