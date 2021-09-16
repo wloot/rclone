@@ -35,6 +35,7 @@ func TestCheckConfigName(t *testing.T) {
 		{"-remote", errCantStartWithDash},
 		{"r-emote-", nil},
 		{"_rem_ote_", nil},
+		{".r.e.m.o.t.e.", nil},
 	} {
 		got := CheckConfigName(test.in)
 		assert.Equal(t, test.want, got, test.in)
@@ -49,6 +50,7 @@ func TestCheckRemoteName(t *testing.T) {
 		{":remote:", nil},
 		{":s3:", nil},
 		{"remote:", nil},
+		{".r.e.m.o.t.e.:", nil},
 		{"", errInvalidCharacters},
 		{"rem:ote", errInvalidCharacters},
 		{"rem:ote:", errInvalidCharacters},
@@ -177,8 +179,12 @@ func TestParse(t *testing.T) {
 				Path:         "/path/to/file",
 			},
 		}, {
-			in:      "rem.ote:/path/to/file",
-			wantErr: errInvalidCharacters,
+			in: "rem.ote:/path/to/file",
+			wantParsed: Parsed{
+				ConfigString: "rem.ote",
+				Name:         "rem.ote",
+				Path:         "/path/to/file",
+			},
 		}, {
 			in: ":backend:/path/to/file",
 			wantParsed: Parsed{
@@ -388,7 +394,7 @@ func TestSplitFs(t *testing.T) {
 		{"remote:/potato", "remote:", "/potato", nil},
 		{"remote:/potato/potato", "remote:", "/potato/potato", nil},
 		{"remote:potato/sausage", "remote:", "potato/sausage", nil},
-		{"rem.ote:potato/sausage", "", "", errInvalidCharacters},
+		{"rem.ote:potato/sausage", "rem.ote:", "potato/sausage", nil},
 
 		{":remote:", ":remote:", "", nil},
 		{":remote:potato", ":remote:", "potato", nil},
@@ -429,7 +435,7 @@ func TestSplit(t *testing.T) {
 		{"remote:/potato", "remote:/", "potato", nil},
 		{"remote:/potato/potato", "remote:/potato/", "potato", nil},
 		{"remote:potato/sausage", "remote:potato/", "sausage", nil},
-		{"rem.ote:potato/sausage", "", "", errInvalidCharacters},
+		{"rem.ote:potato/sausage", "rem.ote:potato/", "sausage", nil},
 
 		{":remote:", ":remote:", "", nil},
 		{":remote:potato", ":remote:", "potato", nil},
