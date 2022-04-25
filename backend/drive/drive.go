@@ -1190,7 +1190,8 @@ func parseExtensions(extensionsIn ...string) (extensions, mimeTypes []string, er
 func getClient(ctx context.Context, opt *Options) *http.Client {
 	t := fshttp.NewTransportCustom(ctx, func(t *http.Transport) {
 		if opt.DisableHTTP2 {
-			t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+			t.ForceAttemptHTTP2 = false
+			t.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
 		}
 	})
 	return &http.Client{

@@ -17,7 +17,6 @@ import (
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/accounting"
-	"github.com/rclone/rclone/lib/structs"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -46,11 +45,8 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) ht
 	ci := fs.GetConfig(ctx)
 	// Start with a sensible set of defaults then override.
 	// This also means we get new stuff when it gets added to go
-	t := new(http.Transport)
-	structs.SetDefaults(t, http.DefaultTransport.(*http.Transport))
-	t.Proxy = http.ProxyFromEnvironment
-	t.MaxIdleConnsPerHost = 2 * (ci.Checkers + ci.Transfers + 1)
-	t.MaxIdleConns = 2 * t.MaxIdleConnsPerHost
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = t.MaxIdleConns
 	t.TLSHandshakeTimeout = ci.ConnectTimeout
 	t.ResponseHeaderTimeout = ci.Timeout
 	t.DisableKeepAlives = ci.DisableHTTPKeepAlives
@@ -94,7 +90,6 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) ht
 	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return dialContext(ctx, network, addr, ci)
 	}
-	t.IdleConnTimeout = 60 * time.Second
 	t.ExpectContinueTimeout = ci.ExpectContinueTimeout
 
 	if ci.Dump&(fs.DumpHeaders|fs.DumpBodies|fs.DumpAuth|fs.DumpRequests|fs.DumpResponses) != 0 {
@@ -105,7 +100,8 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) ht
 	}
 
 	if ci.DisableHTTP2 {
-		t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+		t.ForceAttemptHTTP2 = false
+		t.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
 	}
 
 	// customize the transport if required
