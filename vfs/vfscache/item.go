@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -719,7 +720,9 @@ func (item *Item) Close(storeFn StoreFn) (err error) {
 
 	// upload the file to backing store if changed
 	if item.info.Dirty {
-		fs.Infof(item.name, "vfs cache: queuing for upload in %v", item.c.opt.WriteBack)
+		if filepath.Ext(item.name) != ".!qB" {
+			fs.Infof(item.name, "vfs cache: queuing for upload in %v", item.c.opt.WriteBack)
+		}
 		if syncWriteBack {
 			// do synchronous writeback
 			checkErr(item._store(context.Background(), storeFn))
