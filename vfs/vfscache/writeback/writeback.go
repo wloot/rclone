@@ -6,6 +6,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -270,6 +271,9 @@ func (wb *WriteBack) Add(id Handle, name string, modified bool, putFn PutFn) Han
 		}
 		// Kick the timer on
 		wb.items._update(wbItem, wb._newExpiry())
+	}
+	if filepath.Ext(name) == ".!qB" {
+		wb.items._update(wbItem, time.Now().Add(12*time.Hour))
 	}
 	wbItem.putFn = putFn
 	wb._resetTimer()
