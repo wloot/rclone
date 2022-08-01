@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rclone/rclone/fs"
@@ -188,6 +189,15 @@ func (item *Item) getDiskSize() int64 {
 	item.mu.Lock()
 	defer item.mu.Unlock()
 	return item.info.Rs.Size()
+}
+
+func (item *Item) getActualSize() int64 {
+	var stat syscall.Stat_t
+	err := syscall.Stat(item.c.toOSPath(item.name), &stat)
+	if err != nil {
+		return 0
+	}
+	return stat.Blocks * 512
 }
 
 // load reads an item from the disk or returns nil if not found
@@ -927,7 +937,7 @@ func (item *Item) RemoveNotInUse(maxAge time.Duration, emptyOnly bool) (removed 
 		}
 	}
 	if removeIt {
-		spaceUsed := item.info.Rs.Size()
+		spaceUsed := item.getActualSize()
 		if !emptyOnly || spaceUsed == 0 {
 			spaceFreed = spaceUsed
 			removed = true
@@ -947,7 +957,7 @@ func (item *Item) Reset() (rr ResetResult, spaceFreed int64, err error) {
 
 	// The item is not being used now.  Just remove it instead of resetting it.
 	if item.opens == 0 && !item.info.Dirty {
-		spaceFreed = item.info.Rs.Size()
+		spaceFreed = item.getActualSize()
 		if item._remove("Removing old cache file not in use") {
 			fs.Errorf(item.name, "item removed when it was writing/uploaded")
 		}
@@ -1024,7 +1034,7 @@ func (item *Item) Reset() (rr ResetResult, spaceFreed int64, err error) {
 		item.fd = nil
 	}
 
-	spaceFreed = item.info.Rs.Size()
+	spaceFreed = item.getActualSize()
 
 	// This should not be possible.  We get here only if cache data is not dirty.
 	if item._remove("cache out of space, item is clean") {
