@@ -689,7 +689,7 @@ func (c *Cache) updateUsed() (used int64) {
 
 	newUsed := int64(0)
 	for _, item := range c.item {
-		newUsed += item.getDiskSize()
+		newUsed += item.getActualSize()
 	}
 	c.used = newUsed
 	return newUsed
