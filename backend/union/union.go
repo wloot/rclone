@@ -831,6 +831,10 @@ func (f *Fs) searchEntries(entries ...upstream.Entry) (upstream.Entry, error) {
 	return f.searchPolicy.SearchEntries(entries...)
 }
 
+func (f *Fs) createEntries(entries ...upstream.Entry) ([]upstream.Entry, error) {
+	return f.createPolicy.CreateEntries(entries...)
+}
+
 func (f *Fs) mergeDirEntries(entriesList [][]upstream.Entry) (fs.DirEntries, error) {
 	entryMap := make(map[string]([]upstream.Entry))
 	for _, en := range entriesList {
