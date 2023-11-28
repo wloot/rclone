@@ -168,7 +168,7 @@ func NewConfig() *ConfigInfo {
 	c.ModifyWindow = time.Nanosecond
 	c.Checkers = 8
 	c.Transfers = 4
-	c.ConnectTimeout = 60 * time.Second
+	c.ConnectTimeout = 30 * time.Second
 	c.Timeout = 5 * 60 * time.Second
 	c.ExpectContinueTimeout = 1 * time.Second
 	c.DeleteMode = DeleteModeDefault

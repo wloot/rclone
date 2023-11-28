@@ -580,7 +580,7 @@ configurations.`,
 			Advanced: true,
 		}, {
 			Name:    "disable_http2",
-			Default: true,
+			Default: false,
 			Help: `Disable drive using http2.
 
 There is currently an unsolved issue with the google drive backend and

@@ -17,7 +17,7 @@ import (
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/accounting"
-	"github.com/rclone/rclone/lib/structs"
+	"golang.org/x/net/http2"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -46,13 +46,9 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) ht
 	ci := fs.GetConfig(ctx)
 	// Start with a sensible set of defaults then override.
 	// This also means we get new stuff when it gets added to go
-	t := new(http.Transport)
-	structs.SetDefaults(t, http.DefaultTransport.(*http.Transport))
-	t.Proxy = http.ProxyFromEnvironment
-	t.MaxIdleConnsPerHost = 2 * (ci.Checkers + ci.Transfers + 1)
-	t.MaxIdleConns = 2 * t.MaxIdleConnsPerHost
-	t.TLSHandshakeTimeout = ci.ConnectTimeout
-	t.ResponseHeaderTimeout = ci.Timeout
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = 100
+	t.ResponseHeaderTimeout = ci.ConnectTimeout
 	t.DisableKeepAlives = ci.DisableHTTPKeepAlives
 
 	// TLS Config
@@ -74,7 +70,6 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) ht
 
 	// Load CA certs
 	if len(ci.CaCert) != 0 {
-
 		caCertPool := x509.NewCertPool()
 
 		for _, cert := range ci.CaCert {
@@ -94,7 +89,6 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) ht
 	t.DialContext = func(reqCtx context.Context, network, addr string) (net.Conn, error) {
 		return NewDialer(ctx).DialContext(reqCtx, network, addr)
 	}
-	t.IdleConnTimeout = 60 * time.Second
 	t.ExpectContinueTimeout = ci.ExpectContinueTimeout
 
 	if ci.Dump&(fs.DumpHeaders|fs.DumpBodies|fs.DumpAuth|fs.DumpRequests|fs.DumpResponses) != 0 {
@@ -106,6 +100,11 @@ func NewTransportCustom(ctx context.Context, customize func(*http.Transport)) ht
 
 	if ci.DisableHTTP2 {
 		t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	} else {
+		http2Trans, err := http2.ConfigureTransports(t)
+		if err == nil {
+			http2Trans.ReadIdleTimeout = time.Second * 31
+		}
 	}
 
 	// customize the transport if required
