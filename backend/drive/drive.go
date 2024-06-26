@@ -55,6 +55,8 @@ import (
 
 // Constants
 const (
+	defaultSAChangeSleep = time.Duration(2 * time.Minute)
+
 	rcloneClientID              = "202264815644.apps.googleusercontent.com"
 	rcloneEncryptedClientSecret = "eX8GpZTVx3vxMWVkuuBdDWmAUE6rGhTwVrvG9GhllYccSdj2-mvHVg"
 	driveFolderType             = "application/vnd.google-apps.folder"
@@ -329,6 +331,10 @@ a non root folder as its starting point.
 		}, {
 			Name: "service_account_file",
 			Help: "Service Account Credentials JSON file path.\n\nLeave blank normally.\nNeeded only if you want use SA instead of interactive login." + env.ShellExpandHelp,
+		}, {
+			Name:     "service_account_file_path",
+			Help:     "Service Account Credentials JSON folder path.",
+			Advanced: true,
 		}, {
 			Name:      "service_account_credentials",
 			Help:      "Service Account Credentials JSON blob.\n\nLeave blank normally.\nNeeded only if you want use SA instead of interactive login.",
@@ -774,6 +780,8 @@ two accounts.
 
 // Options defines the configuration for this backend
 type Options struct {
+	ServiceAccountPath string `config:"service_account_file_path"`
+
 	Scope                     string               `config:"scope"`
 	RootFolderID              string               `config:"root_folder_id"`
 	ServiceAccountFile        string               `config:"service_account_file"`
@@ -821,6 +829,9 @@ type Options struct {
 
 // Fs represents a remote drive server
 type Fs struct {
+	serviceAccountPathIndex  int
+	serviceAccountLastChange time.Time
+
 	name             string             // name of this remote
 	root             string             // the path we are working on
 	opt              Options            // parsed options
@@ -905,6 +916,25 @@ func (f *Fs) Features() *fs.Features {
 	return f.features
 }
 
+func tryChangeSA(ctx context.Context, f *Fs) {
+	if len(f.opt.ServiceAccountPath) <= 0 {
+		return
+	}
+	if time.Since(f.serviceAccountLastChange) < defaultSAChangeSleep {
+		return
+	}
+	files, err := os.ReadDir(f.opt.ServiceAccountPath)
+	if err != nil {
+		return
+	}
+	f.serviceAccountPathIndex += 1
+	if len(files) <= f.serviceAccountPathIndex {
+		f.serviceAccountPathIndex = 0
+	}
+	f.changeServiceAccountFile(ctx, path.Join(f.opt.ServiceAccountPath, files[f.serviceAccountPathIndex].Name()))
+	f.serviceAccountLastChange = time.Now()
+}
+
 // shouldRetry determines whether a given err rates being retried
 func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 	if fserrors.ContextError(ctx, &err) {
@@ -927,17 +957,21 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 			if reason == "rateLimitExceeded" || reason == "userRateLimitExceeded" {
 				if f.opt.StopOnUploadLimit && gerr.Errors[0].Message == "User rate limit exceeded." {
 					fs.Errorf(f, "Received upload limit error: %v", err)
+					tryChangeSA(ctx, f)
 					return false, fserrors.FatalError(err)
 				}
 				return true, err
 			} else if f.opt.StopOnDownloadLimit && reason == "downloadQuotaExceeded" {
 				fs.Errorf(f, "Received download limit error: %v", err)
+				tryChangeSA(ctx, f)
 				return false, fserrors.FatalError(err)
 			} else if f.opt.StopOnUploadLimit && (reason == "quotaExceeded" || reason == "storageQuotaExceeded") {
 				fs.Errorf(f, "Received upload limit error: %v", err)
+				tryChangeSA(ctx, f)
 				return false, fserrors.FatalError(err)
 			} else if f.opt.StopOnUploadLimit && reason == "teamDriveFileLimitExceeded" {
 				fs.Errorf(f, "Received Shared Drive file limit error: %v", err)
+				tryChangeSA(ctx, f)
 				return false, fserrors.FatalError(err)
 			}
 		}
@@ -1358,6 +1392,14 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 	err = checkUploadChunkSize(opt.ChunkSize)
 	if err != nil {
 		return nil, fmt.Errorf("drive: chunk size: %w", err)
+	}
+
+	if dir := opt.ServiceAccountPath; len(dir) > 0 {
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("drive: failed to read service account path: %w", err)
+		}
+		opt.ServiceAccountFile = dir + "/" + files[0].Name()
 	}
 
 	oAuthClient, err := createOAuthClient(ctx, opt, name, m)
@@ -3316,7 +3358,7 @@ func (f *Fs) changeChunkSize(chunkSizeString string) (err error) {
 }
 
 func (f *Fs) changeServiceAccountFile(ctx context.Context, file string) (err error) {
-	fs.Debugf(nil, "Changing Service Account File from %s to %s", f.opt.ServiceAccountFile, file)
+	fs.Infof(nil, "Changing Service Account File from %s to %s", f.opt.ServiceAccountFile, file)
 	if file == f.opt.ServiceAccountFile {
 		return nil
 	}
