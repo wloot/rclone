@@ -16,6 +16,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"sort"
@@ -975,6 +976,10 @@ func (f *Fs) shouldRetry(ctx context.Context, err error) (bool, error) {
 				return false, fserrors.FatalError(err)
 			}
 		}
+	case *url.Error:
+		if gerr.Err.Error() == "stopped after 10 redirects" {
+			tryChangeSA(ctx, f)
+		}
 	}
 	return false, err
 }
@@ -1399,7 +1404,7 @@ func newFs(ctx context.Context, name, path string, m configmap.Mapper) (*Fs, err
 		if err != nil {
 			return nil, fmt.Errorf("drive: failed to read service account path: %w", err)
 		}
-		opt.ServiceAccountFile = dir + "/" + files[0].Name()
+		opt.ServiceAccountFile = strings.TrimSuffix(dir, "/") + "/" + files[0].Name()
 	}
 
 	oAuthClient, err := createOAuthClient(ctx, opt, name, m)
